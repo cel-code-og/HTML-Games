@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flappy Bird</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #222;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: sans-serif;
+            overflow: hidden;
+        }
+        canvas {
+            border: 4px solid #fff;
+            background-color: #70c5ce;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="gameCanvas" width="400" height="600"></canvas>
+
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+
+// Game Core Metrics
+let birdY = 300;
+let birdX = 50;
+let velocity = 0;
+const gravity = 0.4;
+const jump = -7;
+const birdSize = 20;
+
+let pipes = [];
+const pipeWidth = 60;
+let score = 0;
+let gameOver = false;
+let gameStarted = false;
+
+// Currency & Skin Shop Database
+let coins = localStorage.getItem("flappyCoins") ? parseInt(localStorage.getItem("flappyCoins")) : 0;
+let hasChristmasSkin = localStorage.getItem("flappyHasXmas") === "true";
+let activeSkin = localStorage.getItem("flappyActiveSkin") ? localStorage.getItem("flappyActiveSkin") : "default";
+
+// Difficulty System Setup ("easy", "medium", "hard")
+let difficulty = localStorage.getItem("flappyDiff") ? localStorage.getItem("flappyDiff") : "medium";
+let pipeGap = 160;
+let pipeSpeed = 2.0;
+let coinReward = 2;
+
+// High Score Tracking for all 3 modes independently
+let scores = {
+    easy: localStorage.getItem("flappyBest_easy") ? parseInt(localStorage.getItem("flappyBest_easy")) : 0,
+    medium: localStorage.getItem("flappyBest_medium") ? parseInt(localStorage.getItem("flappyBest_medium")) : 0,
+    hard: localStorage.getItem("flappyBest_hard") ? parseInt(localStorage.getItem("flappyBest_hard")) : 0
+};
+
+function applyDifficulty() {
+    if (difficulty === "easy") {
+        pipeGap = 170;
+        pipeSpeed = 2.0;
+        coinReward = 1;
+    } else if (difficulty === "medium") {
+        pipeGap = 140;
+        pipeSpeed = 2.5;
+        coinReward = 2;
+    } else if (difficulty === "hard") {
+        pipeGap = 115;
+        pipeSpeed = 3.2;
+        coinReward = 3;
+    }
+}
+applyDifficulty();
+
+// State Controller Menu System
+let gameState = "menu"; 
+
+// Button Geometries
+const btnWidth = 160;
+const btnHeight = 50;
+const btnX = canvas.width / 2 - btnWidth / 2;
+
+const playBtnY = 220;
+const shopBtnY = 290;
+const optionsBtnY = 360;
+const backBtnY = 500;
+
+// Small Gameplay Back Button Dimensions
+const inGameBackX = 15;
+const inGameBackY = 70;
+const inGameBackW = 75;
+const inGameBackH = 32;
+
+// Input Processing Event Handlers
+document.addEventListener("keydown", function(e) {
+    if (e.code === "Space") {
+        if (gameState === "game") {
+            triggerJump();
+        } else if (gameState === "menu") {
+            gameState = "game";
+            triggerJump();
+        }
+    } else if (e.code === "Escape") {
+        if (gameState === "game") {
+            gameState = "menu";
+        }
+    }
+});
+
+canvas.addEventListener("mousedown", function(e) {
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    if (gameState === "menu") {
+        if (mouseX >= btnX && mouseX <= btnX + btnWidth && mouseY >= playBtnY && mouseY <= playBtnY + btnHeight) {
+            gameState = "game";
+            triggerJump();
+        }
+        else if (mouseX >= btnX && mouseX <= btnX + btnWidth && mouseY >= shopBtnY && mouseY <= shopBtnY + btnHeight) {
+            gameState = "shop";
+        }
+        else if (mouseX >= btnX && mouseX <= btnX + btnWidth && mouseY >= optionsBtnY && mouseY <= optionsBtnY + btnHeight) {
+            gameState = "options";
+        }
+    } 
+    else if (gameState === "options") {
+        if (mouseX >= 30 && mouseX <= 130 && mouseY >= 210 && mouseY <= 250) {
+            difficulty = "easy";
+            localStorage.setItem("flappyDiff", "easy");
+            applyDifficulty();
+        }
+        else if (mouseX >= 150 && mouseX <= 250 && mouseY >= 210 && mouseY <= 250) {
+            difficulty = "medium";
+            localStorage.setItem("flappyDiff", "medium");
+            applyDifficulty();
+        }
+        else if (mouseX >= 270 && mouseX <= 370 && mouseY >= 210 && mouseY <= 250) {
+            difficulty = "hard";
+            localStorage.setItem("flappyDiff", "hard");
+            applyDifficulty();
+        }
+        else if (mouseX >= btnX && mouseX <= btnX + btnWidth && mouseY >= 340 && mouseY <= 385) {
+            scores.easy = 0;
+            scores.medium = 0;
+            scores.hard = 0;
+            coins = 0;
+            hasChristmasSkin = false;
+            activeSkin = "default";
+            localStorage.setItem("flappyBest_easy", 0);
+            localStorage.setItem("flappyBest_medium", 0);
+            localStorage.setItem("flappyBest_hard", 0);
+            localStorage.setItem("flappyCoins", 0);
+            localStorage.setItem("flappyHasXmas", "false");
+            localStorage.setItem("flappyActiveSkin", "default");
+        }
+        else if (mouseX >= btnX && mouseX <= btnX + btnWidth && mouseY >= backBtnY && mouseY <= backBtnY + btnHeight) {
+            gameState = "menu";
+        }
+    }
+    else if (gameState === "shop") {
+        if (mouseX >= 40 && mouseX <= 180 && mouseY >= 240 && mouseY <= 280) {
+            activeSkin = "default";
+            localStorage.setItem("flappyActiveSkin", "default");
+        }
+        else if (mouseX >= 220 && mouseX <= 360 && mouseY >= 240 && mouseY <= 280) {
+            if (!hasChristmasSkin) {
+                if (coins >= 20) {
+                    coins -= 20;
+                    hasChristmasSkin = true;
+                    activeSkin = "christmas";
+                    localStorage.setItem("flappyCoins", coins);
+                    localStorage.setItem("flappyHasXmas", "true");
+                    localStorage.setItem("flappyActiveSkin", "christmas");
+                }
+            } else {
+                activeSkin = "christmas";
+                localStorage.setItem("flappyActiveSkin", "christmas");
+            }
+        }
+        else if (mouseX >= btnX && mouseX <= btnX + btnWidth && mouseY >= backBtnY && mouseY <= backBtnY + btnHeight) {
+            gameState = "menu";
+        }
+    } 
+    else if (gameState === "game") {
+        if (mouseX >= inGameBackX && mouseX <= inGameBackX + inGameBackW && mouseY >= inGameBackY && mouseY <= inGameBackY + inGameBackH) {
+            gameState = "menu";
+        } else {
+            triggerJump();
+        }
+    }
+});
+
+canvas.addEventListener("touchstart", function(e) {
+    if (gameState === "game") {
+        const rect = canvas.getBoundingClientRect();
+        const touchX = e.touches.clientX - rect.left;
+        const touchY = e.touches.clientY - rect.top;
+
+        if (touchX >= inGameBackX && touchX <= inGameBackX + inGameBackW && touchY >= inGameBackY && touchY <= inGameBackY + inGameBackH) {
+            gameState = "menu";
+            e.preventDefault();
+        } else {
+            e.preventDefault();
+            triggerJump();
+        }
+    }
+});
+
+function triggerJump() {
+    if (gameOver) {
+        resetGame();
+    } else if (!gameStarted) {
+        gameStarted = true;
+    }
+    velocity = jump;
+}
+
+function resetGame() {
+    birdY = 300;
+    velocity = 0;
+    pipes = [];
+    score = 0;
+    gameOver = false;
+    gameStarted = false;
+    applyDifficulty();
+    gameState = "game";
+}
+
+function spawnPipe() {
+    const minHeight = 50;
+    const maxHeight = canvas.height - pipeGap - minHeight - 50;
+    const topHeight = Math.floor(Math.random() * (maxHeight - minHeight + 1)) + minHeight;
+    
+    pipes.push({
+        x: canvas.width,
+        top: topHeight,
+        bottom: canvas.height - topHeight - pipeGap,
+        passed: false
+    });
+}
+function drawButton(text, x, y, width, height, baseColor, isSelected) {
+    ctx.fillStyle = baseColor;
+    ctx.fillRect(x, y, width, height);
+    ctx.strokeStyle = isSelected ? "#fff" : "#000";
+    ctx.lineWidth = isSelected ? 4 : 3;
+    ctx.strokeRect(x, y, width, height);
+    
+    ctx.fillStyle = isSelected ? "#fff" : "#ddd";
+    ctx.font = "bold 16px sans-serif";
+    if (height > 45) ctx.font = "bold 20px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 4;
+    ctx.strokeText(text, x + width / 2, y + height / 2);
+    ctx.fillText(text, x + width / 2, y + height / 2);
+    ctx.textBaseline = "alphabetic";
+}
+
+function drawSmallBackButton(text, x, y, width, height, baseColor) {
+    ctx.fillStyle = baseColor;
+    ctx.fillRect(x, y, width, height);
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, width, height);
+    
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 13px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, x + width / 2, y + height / 2);
+    ctx.textBaseline = "alphabetic";
+}
+
+function update() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = "#d4a373";
+    ctx.fillRect(0, canvas.height - 50, canvas.width, 50);
+    ctx.fillStyle = "#606c38";
+    ctx.fillRect(0, canvas.height - 60, canvas.width, 10);
+
+    if (gameState === "game" && gameStarted && !gameOver) {
+        velocity += gravity;
+        birdY += velocity;
+
+        if (pipes.length === 0 || pipes[pipes.length - 1].x < canvas.width - 200) {
+            spawnPipe();
+        }
+
+        for (let i = pipes.length - 1; i >= 0; i--) {
+            pipes[i].x -= pipeSpeed;
+
+            if (!pipes[i].passed && pipes[i].x + pipeWidth < birdX) {
+                score++;
+                pipes[i].passed = true;
+                
+                coins += coinReward;
+                localStorage.setItem("flappyCoins", coins);
+                
+                if (score > scores[difficulty]) {
+                    scores[difficulty] = score;
+                    localStorage.setItem(`flappyBest_${difficulty}`, score);
+                }
+            }
+
+            if (
+                birdX + birdSize > pipes[i].x && 
+                birdX - birdSize < pipes[i].x + pipeWidth &&
+                (birdY - birdSize < pipes[i].top || birdY + birdSize > canvas.height - pipes[i].bottom)
+            ) {
+                gameOver = true;
+            }
+
+            if (pipes[i].x + pipeWidth < 0) {
+                pipes.splice(i, 1);
+            }
+        }
+
+        if (birdY + birdSize >= canvas.height - 60 || birdY - birdSize <= 0) {
+            gameOver = true;
+        }
+    }
+
+    if (gameState === "game" || gameOver) {
+        ctx.fillStyle = "#2a9d8f";
+        pipes.forEach(pipe => {
+            ctx.fillRect(pipe.x, 0, pipeWidth, pipe.top);
+            ctx.strokeStyle = "#1d635a";
+            ctx.lineWidth = 3;
+            ctx.strokeRect(pipe.x, 0, pipeWidth, pipe.top);
+
+            ctx.fillRect(pipe.x, canvas.height - pipe.bottom, pipeWidth, pipe.bottom);
+            ctx.strokeRect(pipe.x, canvas.height - pipe.bottom, pipeWidth, pipe.bottom);
+        });
+    }
+
+    // Dynamic Skin Render Pipeline Switcher
+    ctx.beginPath();
+    ctx.arc(birdX, birdY, birdSize, 0, Math.PI * 2);
+    
+    if (activeSkin === "christmas") {
+        ctx.fillStyle = "#d90429"; // Holiday Red Core
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#000";
+        ctx.stroke();
+        ctx.closePath();
+        
+        // Santa Hat Vector Canvas Engine Render Layers
+        ctx.fillStyle = "#d90429"; // Hat Cone Cone Shape
+        ctx.beginPath();
+        ctx.moveTo(birdX - 16, birdY - 12);
+        ctx.lineTo(birdX + 4, birdY - 35); // Hat Peak
+        ctx.lineTo(birdX + 16, birdY - 12);
+        ctx.fill();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = "#000";
+        ctx.stroke();
+        ctx.closePath();
+
+        // Fluffy Hat White Base Trim Ring
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(birdX - 10, birdY - 14, 5, 0, Math.PI * 2);
+        ctx.arc(birdX - 4, birdY - 15, 5, 0, Math.PI * 2);
+        ctx.arc(birdX + 4, birdY - 15, 5, 0, Math.PI * 2);
+        ctx.arc(birdX + 10, birdY - 14, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.closePath();
+
+        // White Tip Pom-Pom Ball Asset
+        ctx.beginPath();
+        ctx.arc(birdX + 6, birdY - 37, 5, 0, Math.PI * 2);
+        ctx.fillStyle = "#fff";
+        ctx.fill();
+        ctx.stroke();
+        ctx.closePath();
+    } else {
+        ctx.fillStyle = "#f4a261"; // Classic Variant
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#000";
+        ctx.stroke();
+        ctx.closePath();
+    }
+
+    // Generic Overlapping Face Assets
+    ctx.beginPath();
+    ctx.arc(birdX + 8, birdY - 5, 4, 0, Math.PI * 2);
+    ctx.fillStyle = "#fff";
+    ctx.fill();
+    ctx.closePath();
+    
+    ctx.beginPath();
+    ctx.arc(birdX + 10, birdY - 5, 1.5, 0, Math.PI * 2);
+    ctx.fillStyle = "#000";
+    ctx.fill();
+    ctx.closePath();
+    if (gameState === "menu") {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.25)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = "#e76f51";
+        ctx.font = "bold 42px sans-serif";
+        ctx.textAlign = "center";
+        ctx.strokeStyle = "#000";
+        ctx.lineWidth = 6;
+        ctx.strokeText("FLAPPY BIRD", canvas.width / 2, 110);
+        ctx.fillText("FLAPPY BIRD", canvas.width / 2, 110);
+
+        ctx.fillStyle = "#e9c46a";
+        ctx.font = "bold 18px sans-serif";
+        ctx.strokeText(`COINS: ${coins} 🪙`, canvas.width / 2, 160);
+        ctx.fillText(`COINS: ${coins} 🪙`, canvas.width / 2, 160);
+
+        drawButton("PLAY", btnX, playBtnY, btnWidth, btnHeight, "#2a9d8f", false);
+        drawButton("SHOP", btnX, shopBtnY, btnWidth, btnHeight, "#e9c46a", false);
+        drawButton("OPTIONS", btnX, optionsBtnY, btnWidth, btnHeight, "#f4a261", false);
+    } 
+    else if (gameState === "shop") {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 36px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("SKIN SHOP", canvas.width / 2, 100);
+
+        ctx.fillStyle = "#e9c46a";
+        ctx.font = "bold 20px sans-serif";
+        ctx.fillText(`YOUR BALANCE: ${coins} 🪙`, canvas.width / 2, 150);
+        
+        // Render Avatar Selection Row Cards Layout
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 16px sans-serif";
+        ctx.fillText("Default Bird", 110, 220);
+        drawButton(activeSkin === "default" ? "ACTIVE" : "EQUIP", 40, 240, 140, 40, "#2a9d8f", activeSkin === "default");
+
+        ctx.fillStyle = "#fff";
+        ctx.fillText("Santa Bird", 290, 220);
+        
+        // Button Logic Label Configuration depending on ownership structures
+        let xmasBtnText = "BUY (20 🪙)";
+        let xmasBtnColor = "#d90429";
+        if (hasChristmasSkin) {
+            xmasBtnText = activeSkin === "christmas" ? "ACTIVE" : "EQUIP";
+            xmasBtnColor = "#2a9d8f";
+        }
+        drawButton(xmasBtnText, 220, 240, 140, 40, xmasBtnColor, activeSkin === "christmas");
+
+        ctx.font = "14px sans-serif";
+        ctx.fillStyle = "#aaa";
+        ctx.fillText("Fly past pipes across runs to collect coins!", canvas.width / 2, 390);
+
+        drawButton("BACK", btnX, backBtnY, btnWidth, btnHeight, "#e76f51", false);
+    } 
+    else if (gameState === "options") {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 36px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("OPTIONS", canvas.width / 2, 100);
+
+        ctx.font = "bold 20px sans-serif";
+        ctx.fillStyle = "#e9c46a";
+        ctx.fillText("SELECT DIFFICULTY:", canvas.width / 2, 175);
+
+        drawButton("EASY", 30, 210, 100, 40, "#2a9d8f", difficulty === "easy");
+        drawButton("MED", 150, 210, 100, 40, "#e9c46a", difficulty === "medium");
+        drawButton("HARD", 270, 210, 100, 40, "#e76f51", difficulty === "hard");
+
+        ctx.font = "bold 20px sans-serif";
+        ctx.fillStyle = "#e9c46a";
+        ctx.fillText("DATA MANAGEMENT:", canvas.width / 2, 305);
+
+        drawButton("RESET ALL DATA", btnX, 340, btnWidth, 45, "#b7094c", false);
+
+        ctx.font = "14px sans-serif";
+        ctx.fillStyle = "#aaa";
+        ctx.fillText(`Easy Best: ${scores.easy} pts`, canvas.width / 2, 410);
+        ctx.fillText(`Medium Best: ${scores.medium} pts`, canvas.width / 2, 435);
+        ctx.fillText(`Hard Best: ${scores.hard} pts`, canvas.width / 2, 460);
+
+        drawButton("BACK", btnX, backBtnY, btnWidth, btnHeight, "#e76f51", false);
+    } 
+    else if (gameState === "game") {
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 28px sans-serif";
+        ctx.strokeStyle = "#000";
+        ctx.lineWidth = 5;
+        
+        ctx.textAlign = "left";
+        ctx.strokeText(`SCORE: ${score}`, 20, 45);
+        ctx.fillText(`SCORE: ${score}`, 20, 45);
+        
+        ctx.textAlign = "right";
+        ctx.strokeText(`BEST: ${scores[difficulty]}`, canvas.width - 20, 45);
+        ctx.fillText(`BEST: ${scores[difficulty]}`, canvas.width - 20, 45);
+
+        ctx.fillStyle = "#e9c46a";
+        ctx.font = "bold 20px sans-serif";
+        ctx.textAlign = "right";
+        ctx.strokeText(`COINS: ${coins}`, canvas.width - 20, 90);
+        ctx.fillText(`COINS: ${coins}`, canvas.width - 20, 90);
+
+        drawSmallBackButton("← MENU", inGameBackX, inGameBackY, inGameBackW, inGameBackH, "#e76f51");
+
+        if (!gameStarted && !gameOver) {
+            ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#fff";
+            ctx.font = "20px sans-serif";
+            ctx.textAlign = "center";
+            ctx.strokeText(`MODE: ${difficulty.toUpperCase()}`, canvas.width / 2, canvas.height / 2 - 40);
+            ctx.fillText(`MODE: ${difficulty.toUpperCase()}`, canvas.width / 2, canvas.height / 2 - 40);
+            ctx.font = "16px sans-serif";
+            ctx.strokeText("PRESS SPACE TO FLY", canvas.width / 2, canvas.height / 2 + 10);
+            ctx.fillText("PRESS SPACE TO FLY", canvas.width / 2, canvas.height / 2 + 10);
+        }
+
+        if (gameOver) {
+            ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#e76f51";
+            ctx.font = "bold 40px sans-serif";
+            ctx.textAlign = "center";
+            ctx.strokeText("GAME OVER", canvas.width / 2, canvas.height / 2 - 60);
+            ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2 - 60);
+            
+            ctx.fillStyle = "#f4a261";
+            ctx.font = "bold 24px sans-serif";
+            ctx.strokeText(`MODE BEST: ${scores[difficulty]}`, canvas.width / 2, canvas.height / 2 - 15);
+            ctx.fillText(`MODE BEST: ${scores[difficulty]}`, canvas.width / 2, canvas.height / 2 - 15);
+            
+            ctx.fillStyle = "#e9c46a";
+            ctx.font = "bold 22px sans-serif";
+            ctx.strokeText(`TOTAL COINS: ${coins}`, canvas.width / 2, canvas.height / 2 + 25);
+            ctx.fillText(`TOTAL COINS: ${coins}`, canvas.width / 2, canvas.height / 2 + 25);
+            
+            ctx.fillStyle = "#fff";
+            ctx.font = "20px sans-serif";
+            ctx.strokeText("Press Space or Click to Restart", canvas.width / 2, canvas.height / 2 + 75);
+            ctx.fillText("Press Space or Click to Restart", canvas.width / 2, canvas.height / 2 + 75);
+        }
+    }
+
+    requestAnimationFrame(update);
+}
+
+update();
+</script>
+
+</body>
+</html>
