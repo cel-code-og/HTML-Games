@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3D Lobby & Raycaster FPS</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0d0f13; color: #eee; font-family: system-ui, -apple-system, sans-serif;
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh; overflow: hidden; user-select: none;
+    }
+    #hud {
+      position: fixed; top: 14px; left: 16px; right: 16px;
+      display: flex; justify-content: space-between; pointer-events: none;
+      font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.9); z-index: 2; font-size: 14px;
+    }
+    #crosshair {
+      position: fixed; top: 50%; left: 50%; width: 14px; height: 14px;
+      transform: translate(-50%, -50%); pointer-events: none; z-index: 2; display: none;
+    }
+    #crosshair::before, #crosshair::after {
+      content: ""; position: absolute; background: rgba(255, 255, 255, 0.88);
+    }
+    #crosshair::before { top: 6px; left: 0; width: 14px; height: 2px; }
+    #crosshair::after { top: 0; left: 6px; width: 2px; height: 14px; }
+    #lobbyBar {
+      position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+      background: rgba(18, 22, 29, 0.92); border: 1px solid #303846; border-radius: 10px;
+      padding: 10px 18px; display: flex; gap: 12px; align-items: center; z-index: 3;
+    }
+    .bar-btn {
+      padding: 8px 16px; font-size: 14px; font-weight: 700; border: none;
+      border-radius: 6px; cursor: pointer; color: #fff; background: #2c3442;
+    }
+    .bar-btn:hover { background: #3b4557; }
+    .bar-btn.play { background: #e63946; }
+    .bar-btn.play:hover { background: #f24b58; }
+    #shopModal {
+      position: fixed; inset: 0; background: rgba(10, 12, 16, 0.88);
+      display: none; flex-direction: column; align-items: center; justify-content: center;
+      gap: 14px; z-index: 5; padding: 20px;
+    }
+    .shop-grid {
+      display: grid; grid-template-columns: repeat(3, minmax(220px, 280px));
+      gap: 14px; width: 100%; max-width: 880px;
+    }
+    .panel {
+      background: #1b1f27; border: 1px solid #2e3440; border-radius: 10px;
+      padding: 14px; display: flex; flex-direction: column; gap: 8px;
+    }
+    .panel h2 { font-size: 13px; text-transform: uppercase; color: #9aa5b1; letter-spacing: 0.8px; }
+    .opt-btn {
+      background: #252a34; border: 2px solid transparent; border-radius: 7px;
+      padding: 10px; color: #eee; text-align: left; cursor: pointer;
+    }
+    .opt-btn:hover { background: #2f3644; }
+    .opt-btn.active { border-color: #2ec4b6; background: #1d2e30; }
+    .opt-btn.locked { border-color: #5c4b28; }
+    .opt-btn strong { display: block; font-size: 14px; margin-bottom: 2px; }
+    .opt-btn span { font-size: 12px; color: #aab4c0; }
+    canvas {
+      display: block; width: 960px; max-width: 100vw; height: 600px;
+      max-height: 100vh; border: 2px solid #2b313c; background: #000;
+    }
+  </style>
+</head>
+<body>
+  <div id="hud">
+    <div id="hudLeft">LOBBY • VANGUARD • RIFLE | CREDITS: $<span id="credits">250</span></div>
+    <div id="hudRight">Walk onto pads or use buttons below</div>
+  </div>
+  <div id="crosshair"></div>
+
+  <div id="lobbyBar">
+    <span id="lobbyPrompt" style="font-size:13px;color:#cbd5e1;">WASD: Walk Lobby • E: Interact</span>
+    <button class="bar-btn" id="openShopBtn">ARMORY & SHOP</button>
+    <button class="bar-btn play" id="quickPlayBtn">PLAY MATCH</button>
+  </div>
+
+  <div id="shopModal">
+    <h2>ARMORY SHOP & DEPLOYMENT — CREDITS: $<span id="shopCredits">250</span></h2>
+    <div id="shopMsg" style="color:#ffd166;font-size:13px;height:18px;">Click locked items to purchase with Credits</div>
+    <div class="shop-grid">
+      <div class="panel" id="charGroup"><h2>1. Character</h2></div>
+      <div class="panel" id="weaponGroup"><h2>2. Weapon</h2></div>
+      <div class="panel" id="mapGroup"><h2>3. Map</h2></div>
+    </div>
+    <div style="display:flex;gap:12px;">
+      <button class="bar-btn" id="closeShopBtn">BACK TO LOBBY</button>
+      <button class="bar-btn play" id="deployFromShopBtn">PLAY MATCH</button>
+    </div>
+  </div>
+
+  <canvas id="game" width="960" height="600" tabindex="0"></canvas>
+  <script>
+    const canvas = document.getElementById("game"), ctx = canvas.getContext("2d");
+    const hudLeft = document.getElementById("hudLeft"), hudRight = document.getElementById("hudRight");
+    const crosshair = document.getElementById("crosshair"), lobbyBar = document.getElementById("lobbyBar");
+    const lobbyPrompt = document.getElementById("lobbyPrompt"), shopModal = document.getElementById("shopModal");
+    const shopCreditsEl = document.getElementById("shopCredits"), shopMsg = document.getElementById("shopMsg");
+
+    const CHARACTERS = {
+      vanguard:   { id: "vanguard",   name: "Vanguard",   hp: 100, speed: 3.5, cost: 0,   suit: "#3b82f6", visor: "#38bdf8", desc: "100 HP • Balanced" },
+      scout:      { id: "scout",      name: "Scout",      hp: 80,  speed: 4.6, cost: 150, suit: "#10b981", visor: "#a7f3d0", desc: "80 HP • +30% Speed" },
+      juggernaut: { id: "juggernaut", name: "Juggernaut", hp: 165, speed: 2.6, cost: 250, suit: "#8b5cf6", visor: "#ddd6fe", desc: "165 HP • Heavy Armor" }
+    };
+
+    const WEAPONS = {
+      rifle:   { id: "rifle",   name: "Assault Rifle",  short: "RIFLE",   mag: 30, dmg: 35,  pellets: 1, spread: 0.015, rate: 0.14, reloadMs: 850,  cost: 0,   w: 110, h: 105, desc: "30 Mag • Rapid Fire" },
+      shotgun: { id: "shotgun", name: "Combat Shotgun", short: "SHOTGUN", mag: 8,  dmg: 24,  pellets: 6, spread: 0.14,  rate: 0.55, reloadMs: 1100, cost: 200, w: 145, h: 95,  desc: "8 Shells • 6-Pellet Spread" },
+      sniper:  { id: "sniper",  name: "Rail Sniper",    short: "SNIPER",  mag: 5,  dmg: 110, pellets: 1, spread: 0.0,   rate: 0.75, reloadMs: 1200, cost: 300, w: 170, h: 85,  desc: "5 Mag • 1-Shot • R-Click Zoom" }
+    };
+
+    const MAPS = {
+      arena:  { id: "arena",  name: "The Arena",   wallRGB: "176,186,200", desc: "Open pillars & sightlines",
+        rows: ["111111111111","100000000001","100000010001","100110010001","100100000001","100000000101","100001100101","100000000001","101000001101","101000000001","100000000001","111111111111"],
+        spawns: [{ x: 5.5, y: 2.5 }, { x: 9.5, y: 4.5 }, { x: 3.5, y: 9.5 }, { x: 9.5, y: 9.5 }] },
+      maze:   { id: "maze",   name: "The Maze",    wallRGB: "152,188,162", desc: "Tight corridors & flanks",
+        rows: ["111111111111","100010000001","101010111101","101000100001","101111101101","100000001001","111101111011","100001000001","101111011101","100000010001","101110000001","111111111111"],
+        spawns: [{ x: 5.5, y: 1.5 }, { x: 10.5, y: 5.5 }, { x: 1.5, y: 9.5 }, { x: 9.5, y: 10.5 }] },
+      bunker: { id: "bunker", name: "Twin Bunker", wallRGB: "204,172,142", desc: "Split rooms & chokepoints",
+        rows: ["111111111111","100001000001","100001000001","100000000001","100001000001","110111111011","100001000001","100000000001","100001000001","100001000001","100000000001","111111111111"],
+        spawns: [{ x: 8.5, y: 2.5 }, { x: 2.5, y: 8.5 }, { x: 8.5, y: 8.5 }, { x: 9.5, y: 3.5 }] }
+    };
+
+    const state = {
+      mode: "lobby",
+      credits: 250,
+      unlockedChars: new Set(["vanguard"]),
+      unlockedWeapons: new Set(["rifle"]),
+      selectedChar: "vanguard",
+      selectedWeapon: "rifle",
+      selectedMap: "arena",
+      padCooldown: 0
+    };
+
+    const lobbyAvatar = { x: 480, y: 410, vx: 0, vy: 0, facing: -Math.PI / 2, walkPhase: 0, targetX: null, targetY: null };
+    const lobbyPads = [
+      { id: "shop", x: 250, y: 230, r: 58, label: "ARMORY & SHOP", color: "#2ec4b6" },
+      { id: "play", x: 710, y: 230, r: 58, label: "PLAY MATCH",    color: "#e63946" }
+    ];
+
+    function renderShopUI() {
+      shopCreditsEl.textContent = state.credits;
+      const buildGroup = (elId, items, unlockedSet, selectedKey) => {
+        const el = document.getElementById(elId);
+        el.querySelectorAll(".opt-btn").forEach(b => b.remove());
+        Object.values(items).forEach(item => {
+          const unlocked = !unlockedSet || unlockedSet.has(item.id);
+          const active = state[selectedKey] === item.id;
+          const btn = document.createElement("button");
+          btn.className = `opt-btn ${active ? "active" : ""} ${!unlocked ? "locked" : ""}`;
+          btn.innerHTML = `<strong>${item.name} ${unlocked ? (active ? "✓" : "") : `($${item.cost})`}</strong><span>${item.desc}</span>`;
+          btn.onclick = () => {
+            if (!unlocked) {
+              if (state.credits >= item.cost) {
+                state.credits -= item.cost;
+                unlockedSet.add(item.id);
+                state[selectedKey] = item.id;
+                shopMsg.textContent = `Unlocked ${item.name}!`;
+              } else {
+                shopMsg.textContent = `Need $${item.cost - state.credits} more Credits (eliminate enemies in match)!`;
+              }
+            } else {
+              state[selectedKey] = item.id;
+              shopMsg.textContent = `Equipped ${item.name}`;
+            }
+            updateLobbyHUD();
+            renderShopUI();
+          };
+          el.appendChild(btn);
+        });
+      };
+      buildGroup("charGroup", CHARACTERS, state.unlockedChars, "selectedChar");
+      buildGroup("weaponGroup", WEAPONS, state.unlockedWeapons, "selectedWeapon");
+      buildGroup("mapGroup", MAPS, null, "selectedMap");
+    }
+
+    function updateLobbyHUD() {
+      const ch = CHARACTERS[state.selectedChar], wp = WEAPONS[state.selectedWeapon];
+      hudLeft.textContent = `LOBBY • ${ch.name.toUpperCase()} • ${wp.short} | CREDITS: $${state.credits}`;
+      hudRight.textContent = `MAP: ${MAPS[state.selectedMap].name.toUpperCase()}`;
+    }
+
+    function openShop() {
+      if (state.mode !== "lobby") return;
+      renderShopUI();
+      shopModal.style.display = "flex";
+    }
+    function closeShop() {
+      shopModal.style.display = "none";
+      lobbyAvatar.x = 480; lobbyAvatar.y = 410; lobbyAvatar.targetX = null;
+      state.padCooldown = 1.0;
+      canvas.focus();
+    }
+
+    document.getElementById("openShopBtn").onclick = openShop;
+    document.getElementById("closeShopBtn").onclick = closeShop;
+    document.getElementById("quickPlayBtn").onclick = startMatch;
+    document.getElementById("deployFromShopBtn").onclick = () => { shopModal.style.display = "none"; startMatch(); };
+    let map = [], activeMap = MAPS.arena, enemies = [], tracers = [];
+    const player = {
+      x: 2.5, y: 2.5, z: 0, vz: 0, angle: 0, pitch: 0, fov: Math.PI / 3,
+      speed: 3.5, radius: 0.25, hp: 100, score: 0, ammo: 30, maxAmmo: 30,
+      reloading: false, fireCooldown: 0, muzzleFlash: 0, hurtFlash: 0, zoomed: false,
+      char: CHARACTERS.vanguard, weapon: WEAPONS.rifle
+    };
+
+    function startMatch() {
+      const ch = CHARACTERS[state.selectedChar], wp = WEAPONS[state.selectedWeapon];
+      activeMap = MAPS[state.selectedMap];
+      map = activeMap.rows.map(r => r.split("").map(Number));
+
+      Object.assign(player, {
+        x: 2.5, y: 2.5, z: 0, vz: 0, angle: 0, pitch: 0, zoomed: false,
+        char: ch, weapon: wp, hp: ch.hp, speed: ch.speed,
+        ammo: wp.mag, maxAmmo: wp.mag, score: 0, reloading: false
+      });
+
+      enemies = activeMap.spawns.map((p, i) => ({
+        x: p.x, y: p.y, spawnIndex: i, hp: 100, maxHp: 100, speed: 1.55,
+        alive: true, respawnTimer: 0, shootTimer: 1.0 + i * 0.4, muzzleFlash: 0, walkPhase: i
+      }));
+      tracers = [];
+
+      state.mode = "match";
+      lobbyBar.style.display = "none";
+      shopModal.style.display = "none";
+      crosshair.style.display = "block";
+      updateMatchHUD();
+      canvas.focus();
+      try { canvas.requestPointerLock?.(); } catch (_) {}
+    }
+
+    function returnToLobby(bannerText) {
+      state.mode = "lobby";
+      player.zoomed = false;
+      document.exitPointerLock?.();
+      crosshair.style.display = "none";
+      lobbyBar.style.display = "flex";
+      lobbyAvatar.x = 480; lobbyAvatar.y = 410; lobbyAvatar.targetX = null;
+      state.padCooldown = 1.2;
+      updateLobbyHUD();
+      if (bannerText) lobbyPrompt.textContent = bannerText;
+    }
+
+    function updateMatchHUD() {
+      hudLeft.textContent = `${player.char.name.toUpperCase()} • ${player.weapon.short} | HP: ${player.hp} | $${state.credits}`;
+      hudRight.textContent = `AMMO: ${player.ammo}/${player.maxAmmo}${player.reloading ? " (RELOADING)" : ""} • [L] LOBBY`;
+    }
+
+    const keys = {};
+    window.addEventListener("keydown", (e) => {
+      keys[e.code] = true; keys[e.key.toLowerCase()] = true;
+      if (state.mode === "lobby") {
+        if ((e.code === "KeyE" || e.key.toLowerCase() === "e") && shopModal.style.display !== "flex") {
+          for (const pad of lobbyPads) {
+            if (Math.hypot(lobbyAvatar.x - pad.x, lobbyAvatar.y - pad.y) < pad.r + 18) {
+              if (pad.id === "shop") openShop();
+              if (pad.id === "play") startMatch();
+            }
+          }
+        }
+        return;
+      }
+      if ((e.code === "Space" || e.key === " ") && player.z === 0) { e.preventDefault(); player.vz = 5.4; }
+      if (e.code === "KeyR" || e.key.toLowerCase() === "r") reload();
+      if (e.code === "KeyL" || e.key.toLowerCase() === "l") returnToLobby("Returned from match");
+    });
+    window.addEventListener("keyup", (e) => { keys[e.code] = false; keys[e.key.toLowerCase()] = false; });
+
+    let isDragging = false, lastMouseX = 0, lastMouseY = 0;
+    canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+    canvas.addEventListener("mousedown", (e) => {
+      canvas.focus();
+      if (state.mode === "lobby") {
+        const rect = canvas.getBoundingClientRect();
+        lobbyAvatar.targetX = ((e.clientX - rect.left) / rect.width) * canvas.width;
+        lobbyAvatar.targetY = Math.max(175, Math.min(545, ((e.clientY - rect.top) / rect.height) * canvas.height));
+        return;
+      }
+      if (e.button === 2) { player.zoomed = !player.zoomed; return; }
+      isDragging = true; lastMouseX = e.clientX; lastMouseY = e.clientY;
+      if (document.pointerLockElement !== canvas) { try { canvas.requestPointerLock?.(); } catch (_) {} }
+      shoot();
+    });
+    window.addEventListener("mouseup", () => (isDragging = false));
+
+    document.addEventListener("mousemove", (e) => {
+      if (state.mode !== "match") return;
+      const sens = player.zoomed ? 0.5 : 1;
+      if (document.pointerLockElement === canvas) {
+        player.angle += e.movementX * 0.0025 * sens;
+        player.pitch = Math.max(-140, Math.min(140, player.pitch - e.movementY * 0.45 * sens));
+      } else if (isDragging) {
+        player.angle += (e.clientX - lastMouseX) * 0.006 * sens;
+        player.pitch = Math.max(-140, Math.min(140, player.pitch - (e.clientY - lastMouseY) * 0.8 * sens));
+        lastMouseX = e.clientX; lastMouseY = e.clientY;
+      }
+    });
+
+    function reload() {
+      if (player.reloading || player.ammo === player.maxAmmo || state.mode !== "match") return;
+      player.reloading = true;
+      updateMatchHUD();
+      setTimeout(() => {
+        player.ammo = player.maxAmmo; player.reloading = false;
+        if (state.mode === "match") updateMatchHUD();
+      }, player.weapon.reloadMs);
+    }
+
+    function shoot() {
+      const wp = player.weapon;
+      if (player.reloading || player.fireCooldown > 0 || state.mode !== "match") return;
+      if (player.ammo <= 0) { reload(); return; }
+
+      player.ammo--; player.fireCooldown = wp.rate; player.muzzleFlash = 0.08;
+      updateMatchHUD();
+
+      for (let p = 0; p < wp.pellets; p++) {
+        const rayAngle = player.angle + (Math.random() - 0.5) * wp.spread;
+        for (let d = 0; d < 16; d += 0.05) {
+          const rx = player.x + Math.cos(rayAngle) * d, ry = player.y + Math.sin(rayAngle) * d;
+          if (map[Math.floor(ry)]?.[Math.floor(rx)] === 1) break;
+          let hit = false;
+          for (const en of enemies) {
+            if (en.alive && Math.hypot(en.x - rx, en.y - ry) < 0.38) {
+              en.hp -= wp.dmg;
+              if (en.hp <= 0) {
+                en.alive = false; en.respawnTimer = 3.2;
+                player.score += 100; state.credits += 50;
+                updateMatchHUD();
+              }
+              hit = true; break;
+            }
+          }
+          if (hit) break;
+        }
+      }
+    }
+    function canMove(nx, ny, r = player.radius) {
+      return [[nx - r, ny - r], [nx + r, ny - r], [nx - r, ny + r], [nx + r, ny + r]]
+        .every(([cx, cy]) => map[Math.floor(cy)]?.[Math.floor(cx)] === 0);
+    }
+
+    function hasLineOfSight(x1, y1, x2, y2) {
+      const dist = Math.hypot(x2 - x1, y2 - y1);
+      for (let d = 0.2; d < dist; d += 0.15) {
+        const t = d / dist;
+        if (map[Math.floor(y1 + (y2 - y1) * t)]?.[Math.floor(x1 + (x2 - x1) * t)] === 1) return false;
+      }
+      return true;
+    }
+
+    function updateLobby(dt) {
+      if (shopModal.style.display === "flex") return;
+      if (state.padCooldown > 0) state.padCooldown = Math.max(0, state.padCooldown - dt);
+
+      let mx = (keys["KeyD"] || keys["d"] || keys["ArrowRight"] ? 1 : 0) - (keys["KeyA"] || keys["a"] || keys["ArrowLeft"] ? 1 : 0);
+      let my = (keys["KeyS"] || keys["s"] || keys["ArrowDown"] ? 1 : 0) - (keys["KeyW"] || keys["w"] || keys["ArrowUp"] ? 1 : 0);
+
+      if (mx || my) {
+        lobbyAvatar.targetX = null;
+        const len = Math.hypot(mx, my);
+        mx /= len; my /= len;
+      } else if (lobbyAvatar.targetX !== null) {
+        const dx = lobbyAvatar.targetX - lobbyAvatar.x, dy = lobbyAvatar.targetY - lobbyAvatar.y;
+        const d = Math.hypot(dx, dy);
+        if (d > 6) { mx = dx / d; my = dy / d; } else { lobbyAvatar.targetX = null; }
+      }
+
+      if (mx || my) {
+        lobbyAvatar.x = Math.max(90, Math.min(870, lobbyAvatar.x + mx * 240 * dt));
+        lobbyAvatar.y = Math.max(175, Math.min(545, lobbyAvatar.y + my * 240 * dt));
+        lobbyAvatar.facing = Math.atan2(my, mx);
+        lobbyAvatar.walkPhase += dt * 11;
+      }
+
+      let nearPad = null;
+      for (const pad of lobbyPads) {
+        if (Math.hypot(lobbyAvatar.x - pad.x, lobbyAvatar.y - pad.y) < pad.r) nearPad = pad;
+      }
+      if (nearPad) {
+        lobbyPrompt.textContent = `Standing on ${nearPad.label} — Press [E] or wait...`;
+        if (state.padCooldown <= 0) {
+          if (nearPad.id === "shop") openShop();
+          if (nearPad.id === "play") startMatch();
+        }
+      } else {
+        lobbyPrompt.textContent = "WASD or Click floor to walk • Step onto ARMORY or PLAY pad";
+      }
+    }
+
+    function renderLobby() {
+      const w = canvas.width, h = canvas.height;
+      // Hangar back wall & perspective floor
+      ctx.fillStyle = "#161b24"; ctx.fillRect(0, 0, w, 160);
+      ctx.fillStyle = "#222936"; ctx.fillRect(0, 160, w, h - 160);
+
+      // Perspective floor grid lines
+      ctx.strokeStyle = "rgba(255,255,255,0.06)"; ctx.lineWidth = 2;
+      for (let x = 60; x <= 900; x += 120) {
+        ctx.beginPath(); ctx.moveTo(w / 2 + (x - w / 2) * 0.72, 160); ctx.lineTo(x, h); ctx.stroke();
+      }
+      for (let y = 210; y < h; y += 70) {
+        ctx.beginPath(); ctx.moveTo(40, y); ctx.lineTo(w - 40, y); ctx.stroke();
+      }
+
+      // Hangar wall banners & terminals
+      ctx.fillStyle = "#0f131a"; ctx.fillRect(150, 42, 200, 95); ctx.fillRect(610, 42, 200, 95);
+      ctx.fillStyle = "#2ec4b6"; ctx.font = "bold 16px system-ui"; ctx.textAlign = "center";
+      ctx.fillText("ARMORY & SHOP", 250, 86); ctx.fillStyle = "#94a3b8"; ctx.font = "12px system-ui";
+      ctx.fillText("Characters • Guns • Maps", 250, 108);
+
+      ctx.fillStyle = "#e63946"; ctx.font = "bold 16px system-ui";
+      ctx.fillText("DEPLOYMENT GATE", 710, 86); ctx.fillStyle = "#94a3b8"; ctx.font = "12px system-ui";
+      ctx.fillText(`Next: ${MAPS[state.selectedMap].name}`, 710, 108);
+
+      // Interactive floor pads
+      for (const pad of lobbyPads) {
+        ctx.save();
+        ctx.translate(pad.x, pad.y);
+        ctx.scale(1, 0.58);
+        ctx.fillStyle = pad.color + "33";
+        ctx.strokeStyle = pad.color;
+        ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.arc(0, 0, pad.r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.restore();
+        ctx.fillStyle = "#fff"; ctx.font = "bold 13px system-ui";
+        ctx.fillText(pad.label, pad.x, pad.y + 52);
+      }
+
+      // 3rd-Person Player Character Model
+      const ch = CHARACTERS[state.selectedChar], wp = WEAPONS[state.selectedWeapon];
+      const ax = lobbyAvatar.x, ay = lobbyAvatar.y;
+      const stride = Math.sin(lobbyAvatar.walkPhase) * 6;
+
+      // Ground shadow
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
+      ctx.beginPath(); ctx.ellipse(ax, ay + 24, 22, 10, 0, 0, Math.PI * 2); ctx.fill();
+
+      // Legs
+      ctx.fillStyle = "#1e293b";
+      ctx.fillRect(ax - 11, ay + 2 + stride * 0.5, 9, 22);
+      ctx.fillRect(ax + 2,  ay + 2 - stride * 0.5, 9, 22);
+
+      // Armored Torso
+      ctx.fillStyle = ch.suit;
+      ctx.fillRect(ax - 15, ay - 26, 30, 30);
+      ctx.fillStyle = "rgba(0,0,0,0.25)";
+      ctx.fillRect(ax - 10, ay - 20, 20, 14);
+
+      // Helmet & Visor
+      ctx.fillStyle = ch.suit;
+      ctx.beginPath(); ctx.arc(ax, ay - 38, 13, 0, Math.PI * 2); ctx.fill();
+      const lookDir = Math.cos(lobbyAvatar.facing);
+      ctx.fillStyle = ch.visor;
+      ctx.fillRect(ax - 8 + lookDir * 4, ay - 42, 14, 6);
+
+      // Held Weapon in 3rd person
+      const gunDir = lookDir >= 0 ? 1 : -1;
+      ctx.fillStyle = "#0f172a";
+      ctx.fillRect(ax + (gunDir > 0 ? 6 : -34), ay - 16, wp.id === "sniper" ? 36 : 26, 7);
+      ctx.fillStyle = "#e2e8f0"; ctx.font = "bold 12px system-ui";
+      ctx.fillText(`${ch.name} (${wp.short})`, ax, ay - 58);
+      ctx.textAlign = "left";
+    }
+    function updateMatch(dt) {
+      player.muzzleFlash = Math.max(0, player.muzzleFlash - dt);
+      player.hurtFlash = Math.max(0, player.hurtFlash - dt);
+      player.fireCooldown = Math.max(0, player.fireCooldown - dt);
+
+      if (keys["ArrowLeft"]) player.angle -= 2.5 * dt;
+      if (keys["ArrowRight"]) player.angle += 2.5 * dt;
+
+      if (player.z > 0 || player.vz > 0) {
+        player.z += player.vz * dt; player.vz -= 15.0 * dt;
+        if (player.z <= 0) { player.z = 0; player.vz = 0; }
+      }
+
+      let fwd = (keys["KeyW"] || keys["w"] || keys["ArrowUp"] ? 1 : 0) - (keys["KeyS"] || keys["s"] || keys["ArrowDown"] ? 1 : 0);
+      let strafe = (keys["KeyD"] || keys["d"] ? 1 : 0) - (keys["KeyA"] || keys["a"] ? 1 : 0);
+      const cos = Math.cos(player.angle), sin = Math.sin(player.angle);
+      let vx = (cos * fwd - sin * strafe) * player.speed * dt;
+      let vy = (sin * fwd + cos * strafe) * player.speed * dt;
+      if (fwd && strafe) { vx *= Math.SQRT1_2; vy *= Math.SQRT1_2; }
+
+      if (canMove(player.x + vx, player.y)) player.x += vx;
+      if (canMove(player.x, player.y + vy)) player.y += vy;
+
+      tracers = tracers.filter(tr => (tr.life -= dt) > 0);
+
+      for (const en of enemies) {
+        en.muzzleFlash = Math.max(0, en.muzzleFlash - dt);
+        if (!en.alive) {
+          if ((en.respawnTimer -= dt) <= 0) {
+            const sp = activeMap.spawns[en.spawnIndex];
+            en.x = sp.x; en.y = sp.y; en.hp = en.maxHp; en.alive = true;
+          }
+          continue;
+        }
+        const dx = player.x - en.x, dy = player.y - en.y, dist = Math.hypot(dx, dy);
+        const seesPlayer = dist < 11 && hasLineOfSight(en.x, en.y, player.x, player.y);
+
+        // Move toward player until mid-range so they aim & fire their rifle
+        if (dist > (seesPlayer ? 3.2 : 0.6)) {
+          const ex = (dx / dist) * en.speed * dt, ey = (dy / dist) * en.speed * dt;
+          if (canMove(en.x + ex, en.y, 0.22)) en.x += ex;
+          if (canMove(en.x, en.y + ey, 0.22)) en.y += ey;
+          en.walkPhase += dt * 8;
+        }
+
+        // NPC Ranged Weapon Fire
+        if (seesPlayer && (en.shootTimer -= dt) <= 0) {
+          en.shootTimer = 1.25 + Math.random() * 0.5;
+          en.muzzleFlash = 0.1;
+          tracers.push({ x: en.x, y: en.y, life: 0.14 });
+          if (Math.random() < 0.65) {
+            player.hp = Math.max(0, player.hp - 12);
+            player.hurtFlash = 0.2;
+            updateMatchHUD();
+            if (player.hp <= 0) returnToLobby(`Eliminated! Earned +$${player.score / 2} Credits`);
+          }
+        }
+      }
+    }
+
+    function renderMatch() {
+      const w = canvas.width, h = canvas.height, horizon = h / 2 + player.pitch;
+      const fov = player.zoomed ? player.fov * 0.45 : player.fov;
+
+      ctx.fillStyle = "#1b1f26"; ctx.fillRect(0, 0, w, horizon);
+      ctx.fillStyle = "#32363f"; ctx.fillRect(0, horizon, w, h - horizon);
+
+      const [wr, wg, wb] = activeMap.wallRGB.split(",").map(Number);
+      const zBuffer = new Array(w).fill(Infinity);
+
+      for (let col = 0; col < w; col++) {
+        const rayAngle = player.angle + ((2 * col) / w - 1) * (fov / 2);
+        const rayCos = Math.cos(rayAngle), raySin = Math.sin(rayAngle);
+        let dist = 0, hitSide = 0;
+        while ((dist += 0.02) < 20) {
+          const rx = player.x + rayCos * dist, ry = player.y + raySin * dist;
+          const mx = Math.floor(rx), my = Math.floor(ry);
+          if (map[my]?.[mx] === 1) {
+            hitSide = Math.min(rx - mx, 1 - (rx - mx)) < Math.min(ry - my, 1 - (ry - my)) ? 0 : 1;
+            break;
+          }
+        }
+        const correctedDist = dist * Math.cos(rayAngle - player.angle);
+        zBuffer[col] = correctedDist;
+        const wallH = Math.min(h * 2.2, h / Math.max(correctedDist, 0.05));
+        const jumpShift = player.z * wallH * 0.45;
+        const factor = Math.max(0.15, Math.min(1, 1 / (1 + correctedDist * 0.14))) * (hitSide ? 0.78 : 1);
+        ctx.fillStyle = `rgb(${Math.floor(wr * factor)}, ${Math.floor(wg * factor)}, ${Math.floor(wb * factor)})`;
+        ctx.fillRect(col, horizon - wallH / 2 + jumpShift, 1, wallH);
+      }
+
+      // Render Realistic Armed NPCs (Helmet, Visor, Armor, Legs, Rifle, Muzzle Flash, HP Bar)
+      const visible = enemies.filter(en => en.alive)
+        .map(en => ({ ...en, dist: Math.hypot(en.x - player.x, en.y - player.y) }))
+        .sort((a, b) => b.dist - a.dist);
+
+      for (const en of visible) {
+        let diff = Math.atan2(en.y - player.y, en.x - player.x) - player.angle;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+
+        if (Math.abs(diff) < fov * 0.85 && en.dist > 0.35) {
+          const sxCenter = (0.5 + diff / fov) * w;
+          const sH = Math.min(h * 1.6, h / en.dist), sW = sH * 0.56;
+          const jumpShift = player.z * sH * 0.45;
+          const startX = Math.floor(sxCenter - sW / 2), startY = Math.floor(horizon - sH / 2 + jumpShift);
+          const legSwing = Math.sin(en.walkPhase) * sH * 0.04;
+
+          for (let sx = Math.max(0, startX); sx < Math.min(w, startX + sW); sx++) {
+            if (en.dist >= zBuffer[sx]) continue;
+            const u = (sx - startX) / sW;
+
+            if (u > 0.32 && u < 0.68) {
+              ctx.fillStyle = "#334155";
+              ctx.fillRect(sx, startY + sH * 0.02, 1, sH * 0.19);
+              if (u > 0.36 && u < 0.64) {
+                ctx.fillStyle = "#ef4444";
+                ctx.fillRect(sx, startY + sH * 0.09, 1, sH * 0.05);
+              }
+            }
+            if (u > 0.16 && u < 0.84) {
+              ctx.fillStyle = u > 0.26 && u < 0.74 ? "#991b1b" : "#475569";
+              ctx.fillRect(sx, startY + sH * 0.22, 1, sH * 0.38);
+            }
+            if (u > 0.25 && u < 0.46) {
+              ctx.fillStyle = "#1e293b";
+              ctx.fillRect(sx, startY + sH * 0.60, 1, sH * 0.38 + legSwing);
+            }
+            if (u > 0.54 && u < 0.75) {
+              ctx.fillStyle = "#1e293b";
+              ctx.fillRect(sx, startY + sH * 0.60, 1, sH * 0.38 - legSwing);
+            }
+            if (u > 0.30 && u < 0.92) {
+              ctx.fillStyle = "#090d16";
+              ctx.fillRect(sx, startY + sH * 0.38, 1, sH * 0.07);
+            }
+            if (en.muzzleFlash > 0 && u > 0.78 && u < 0.96) {
+              ctx.fillStyle = "#fde047";
+              ctx.fillRect(sx, startY + sH * 0.35, 1, sH * 0.12);
+            }
+          }
+
+          const midCol = Math.floor(sxCenter);
+          if (midCol >= 0 && midCol < w && en.dist < zBuffer[midCol]) {
+            const barW = sW * 0.7;
+            ctx.fillStyle = "rgba(0,0,0,0.65)";
+            ctx.fillRect(sxCenter - barW / 2, startY - 12, barW, 5);
+            ctx.fillStyle = "#ef4444";
+            ctx.fillRect(sxCenter - barW / 2, startY - 12, barW * (en.hp / en.maxHp), 5);
+          }
+        }
+      }
+
+      // Incoming Enemy Bullet Tracers
+      for (const tr of tracers) {
+        let diff = Math.atan2(tr.y - player.y, tr.x - player.x) - player.angle;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        if (Math.abs(diff) < fov * 0.75) {
+          const tx = (0.5 + diff / fov) * w;
+          ctx.strokeStyle = "rgba(253, 224, 71, 0.85)"; ctx.lineWidth = 3;
+          ctx.beginPath(); ctx.moveTo(tx, horizon); ctx.lineTo(w / 2 + (tx - w / 2) * 0.35, h * 0.62); ctx.stroke();
+        }
+      }
+
+      // First-Person Weapon Viewmodel
+      const wp = player.weapon;
+      const gunBob = Math.sin(performance.now() * 0.01) * (player.z > 0 ? 0 : 3);
+      const gunX = w / 2 + 65, gunY = h - wp.h + 12 + gunBob;
+      ctx.fillStyle = player.char.suit;
+      ctx.fillRect(gunX, gunY, wp.w, wp.h);
+      ctx.fillStyle = "#0f172a";
+      ctx.fillRect(gunX + 10, gunY - 14, 24, 24);
+
+      if (player.muzzleFlash > 0) {
+        ctx.fillStyle = "#ffd166";
+        ctx.beginPath(); ctx.arc(gunX + 22, gunY - 16, 22, 0, Math.PI * 2); ctx.fill();
+      }
+      if (player.zoomed) {
+        ctx.strokeStyle = "rgba(0, 0, 0, 0.78)"; ctx.lineWidth = 85;
+        ctx.strokeRect(0, 0, w, h);
+      }
+      if (player.hurtFlash > 0) {
+        ctx.fillStyle = "rgba(230, 57, 70, 0.35)"; ctx.fillRect(0, 0, w, h);
+      }
+    }
+
+    let lastTime = performance.now();
+    function loop(now) {
+      const dt = Math.min(0.05, (now - lastTime) / 1000);
+      lastTime = now;
+      if (state.mode === "lobby") { updateLobby(dt); renderLobby(); }
+      else { updateMatch(dt); renderMatch(); }
+      requestAnimationFrame(loop);
+    }
+    updateLobbyHUD();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
